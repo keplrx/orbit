@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="referrer" content="no-referrer">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Orbit">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f4f2ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111010" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<title>Orbit</title>
+<style>
+  html, body { margin: 0; background: #f4f2ee; color: #1c1b19; }
+  @media (prefers-color-scheme: dark) { html, body { background: #111010; color: #f2efe9; } }
+  body { font: 15px/1.45 -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+  #gate { max-width: 360px; margin: 0 auto; padding: calc(96px + env(safe-area-inset-top)) 24px 24px; }
+  #gate input, #gate button { display: block; width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: 12px 14px; border-radius: 12px; margin-top: 10px; }
+  #gate input { border: 1px solid rgba(128,128,128,.35); background: transparent; color: inherit; }
+  #gate button { border: 0; background: currentColor; }
+  #gate button span { color: #f4f2ee; }
+  @media (prefers-color-scheme: dark) { #gate button span { color: #111010; } }
+  #gate p { font-size: 13px; opacity: .6; min-height: 20px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="gate" hidden>
+  <input id="k" type="text" placeholder="Link" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off">
+  <button id="go"><span>Open</span></button>
+  <p id="m"></p>
+</div>
+<div id="root"></div>
+<script>
+(() => {
+  'use strict';
+  const g = id => document.getElementById(id);
+  const st = {
+    get(k) { try { const v = localStorage.getItem('orbit.' + k); return v ? JSON.parse(v) : null; } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem('orbit.' + k, JSON.stringify(v)); } catch (e) {} },
+  };
+  let cfg = st.get('cfg'), pkg = st.get('app'), mounted = false, pulling = false;
+
+  async function post(c, body) {
+    const r = await fetch(c.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ token: c.key }, body)) });
+    return r.json();
+  }
+  async function pull(c) {
+    const j = await post(c, { action: 'app' });
+    if (!j.ok || !j.html) { const e = new Error(j.error || 'x'); e.code = j.error; throw e; }
+    return { v: j.v, html: j.html };
+  }
+  function mount(p) {
+    mounted = true;
+    g('gate').hidden = true;
+    const doc = new DOMParser().parseFromString(p.html, 'text/html');
+    doc.querySelectorAll('style').forEach(s => document.head.appendChild(document.importNode(s, true)));
+    const code = [...doc.querySelectorAll('script')].map(s => { const t = s.textContent; s.remove(); return t; });
+    const root = g('root');
+    root.replaceChildren(...[...doc.body.childNodes].map(n => document.importNode(n, true)));
+    code.forEach(t => new Function(t)());
+  }
+  function gate(msg, fill) {
+    g('root').replaceChildren();
+    g('gate').hidden = false;
+    g('m').textContent = msg || '';
+    g('k').value = fill && cfg ? cfg.url + '?key=' + cfg.key : '';
+  }
+  function parse(text) {
+    const m = String(text).trim().match(/^(https:\/\/[^\s?#]+)\?(?:\S*&)?key=([A-Za-z0-9_-]+)/);
+    return m ? { url: m[1], key: m[2] } : null;
+  }
+
+  window.__o = {
+    call: body => post(cfg, body),
+    link: () => cfg.url + '?key=' + cfg.key,
+    relink: (msg, fill) => { if (mounted) { st.set('gate', { msg: msg || '', fill: !!fill }); location.reload(); } else gate(msg, fill); },
+    seen: v => {
+      if (!v || !pkg || v === pkg.v || pulling) return;
+      pulling = true;
+      pull(cfg).then(p => { pkg = p; st.set('app', p); }).catch(() => {}).then(() => { pulling = false; });
+    },
+  };
+
+  g('go').onclick = async () => {
+    const c = parse(g('k').value);
+    if (!c) { g('m').textContent = 'Not recognised.'; return; }
+    g('m').textContent = '…';
+    try {
+      const p = await pull(c);
+      cfg = c; pkg = p; st.set('cfg', c); st.set('app', p);
+      mount(p);
+    } catch (e) { g('m').textContent = e.code === 'auth' ? 'Not accepted.' : 'Couldn’t open that.'; }
+  };
+
+  const pending = st.get('gate');
+  if (pending) { try { localStorage.removeItem('orbit.gate'); } catch (e) {} gate(pending.msg, pending.fill); }
+  else if (!cfg) gate();
+  else if (pkg) mount(pkg);
+  else pull(cfg).then(p => { pkg = p; st.set('app', p); mount(p); }).catch(e => gate(e.code === 'auth' ? 'Not accepted.' : 'Couldn’t open. Check your connection and try again.', true));
+
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+})();
+</script>
+</body>
+</html>
